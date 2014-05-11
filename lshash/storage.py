@@ -5,6 +5,7 @@
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
 import json
+import zlib
 
 try:
     import redis
@@ -88,6 +89,8 @@ class RedisStorage(BaseStorage):
             raise ImportError("redis-py is required to use Redis as storage.")
         self.name = 'redis'
         self.storage = redis.StrictRedis(**config)
+        seed = "[4.0, 36.0, 18.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 18.0, 75.0, 84.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 70.0, 144.0, 14.0, 15.0, 12.0, 1.0, 0.0, 0.0, 9.0, 24.0, 3.0, 3.0, 10.0, 2.0, 6.0, 81.0, 122.0, 2.0, 0.0, 0.0, 0.0, 0.0, 144.0, 144.0, 144.0, 50.0, 1.0, 4.0, 14.0, 17.0, 52.0, 9.0, 15.0, 49.0, 14.0, 81.0, 144.0, 40.0, 0.0, 0.0, 1.0, 6.0, 3.0, 15.0, 97.0, 55.0, 11.0, 16.0, 13.0, 0.0, 0.0, 0.0, 0.0, 3.0, 144.0, 100.0, 18.0, 0.0, 0.0, 0.0, 2.0, 98.0, 144.0, 12.0, 0.0, 0.0, 0.0, 11.0, 60.0, 50.0, 0.0, 0.0, 0.0, 0.0, 6.0, 9.0, 35.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 93.0, 24.0, 0.0, 0.0, 0.0, 0.0, 0.0, 24.0, 71.0, 36.0, 0.0, 0.0, 0.0, 0.0, 1.0, 6.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0]"
+        self.c = Compressor(seed)
 
     def keys(self, pattern="*"):
         return self.storage.keys(pattern)
@@ -99,7 +102,35 @@ class RedisStorage(BaseStorage):
         return self.storage.get(key)
 
     def append_val(self, key, val):
-        self.storage.rpush(key, json.dumps(val))
+        cval = self.c.compress(json.dumps(val))
+        self.storage.rpush(key, cval)
 
     def get_list(self, key):
-        return self.storage.lrange(key, 0, -1)
+        result = [self.c.decompress(r) for r in self.storage.lrange(key, 0, -1)]
+        return result
+
+class Compressor(object):
+    def __init__(self, seed):
+        c = zlib.compressobj(9)
+        d_seed = c.compress(seed)
+        d_seed += c.flush(zlib.Z_SYNC_FLUSH)
+        self.c_context = c.copy()
+
+        d = zlib.decompressobj()
+        d.decompress(d_seed)
+        while d.unconsumed_tail:
+            d.decompress(d.unconsumed_tail)
+        self.d_context = d.copy()
+
+    def compress(self, text):
+        c = self.c_context.copy()
+        t = c.compress(text)
+        t2 = c.flush(zlib.Z_FINISH)
+        return t + t2
+
+    def decompress(self, ctext):
+        d = self.d_context.copy()
+        t = d.decompress(ctext)
+        while d.unconsumed_tail:
+            t += d.decompress(d.unconsumed_tail)
+        return t
