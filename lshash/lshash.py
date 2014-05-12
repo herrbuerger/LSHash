@@ -7,6 +7,7 @@
 import os
 import json
 import numpy as np
+import itertools
 
 from storage import storage
 
@@ -204,7 +205,7 @@ class LSHash(object):
             table.append_val(self._hash(self.uniform_planes[i], input_point),
                              value)
 
-    def query(self, query_point, num_results=None, distance_func=None):
+    def query(self, query_point, num_results=None, distance_func=None, radius=None):
         """ Takes `query_point` which is either a tuple or a list of numbers,
         returns `num_results` of results as a list of tuples that are ranked
         based on the supplied metric function `distance_func`.
@@ -222,9 +223,13 @@ class LSHash(object):
             be one of ("hamming", "euclidean", "true_euclidean",
             "centred_euclidean", "cosine", "l1norm"). By default "euclidean"
             will used.
+        :param radius:
+            (optional) Integer, defines the radius in which a multi-probe should be made.
+            By default 0.
         """
 
         candidates = set()
+
         if not distance_func:
             distance_func = "euclidean"
 
@@ -258,14 +263,29 @@ class LSHash(object):
 
             for i, table in enumerate(self.hash_tables):
                 binary_hash = self._hash(self.uniform_planes[i], query_point)
-                candidates.update(table.get_list(binary_hash))
-
+                if radius:
+                    mutations = self.mutations(binary_hash, radius)
+                    for binary_hash in mutations:
+                        candidates.update(table.get_list(binary_hash))
+                else:
+                    candidates.update(table.get_list(binary_hash))
+                    
         # rank candidates by distance function
         candidates = [(ix, d_func(query_point, self._as_np_array(ix)))
                       for ix in candidates]
         candidates.sort(key=lambda x: x[1])
 
         return candidates[:num_results] if num_results else candidates
+        
+    def mutations(self, word, hamming_distance):
+        result = set()
+        for indices in itertools.combinations(range(len(word)), hamming_distance):
+            for replacements in itertools.product('10', repeat=hamming_distance):
+                mutation = list(word)
+                for index, replacement in zip(indices, replacements):
+                    mutation[index] = replacement
+                result.add("".join(mutation))
+        return result
 
     ### distance functions
 
