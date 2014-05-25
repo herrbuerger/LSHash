@@ -12,11 +12,11 @@ try:
     import redis
 except ImportError:
     redis = None
-    
+     
 try:
-    import plyvel
+    import lmdb
 except ImportError:
-    plyvel = None    
+    lmdb = None
 
 __all__ = ['storage']
 
@@ -30,9 +30,9 @@ def storage(storage_config, index):
     elif 'redis' in storage_config:
         storage_config['redis']['db'] = index
         return RedisStorage(storage_config['redis'])
-    elif 'leveldb' in storage_config:
-        storage_config['leveldb']['db'] = str(index)
-        return LevelDBStorage(storage_config['leveldb'])
+    elif 'lmdb' in storage_config:
+        storage_config['lmdb']['db'] = str(index)
+        return LMDBStorage(storage_config['lmdb'])
     else:
         raise ValueError("Only in-memory dictionary and Redis are supported.")
 
@@ -117,14 +117,17 @@ class RedisStorage(BaseStorage):
     def get_list(self, key):
         result = [self.c.decompress(r) for r in self.storage.lrange(key, 0, -1)]
         return result
-        
-class LevelDBStorage(BaseStorage):
+
+
+class LMDBStorage(BaseStorage):
     def __init__(self, config):
-        if not plyvel:
-            raise ImportError("plyvel is required to use leveldb as storage.")
-        self.name = 'leveldb'
-        db_path = os.path.join(config['path'], config['db'])
-        self.storage = plyvel.DB(db_path, create_if_missing=True)
+        if not lmdb:
+            raise ImportError("lmdb is required to use lmdb as storage.")
+        self.name = 'lmdb'
+        self.env = lmdb.open(config['path'], map_size=1048576 * 1024 * 1024, max_dbs=4)
+        self.storage = self.env.open_db(config['db'], dupsort=True)
+        seed = "[4.0, 36.0, 18.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 18.0, 75.0, 84.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 70.0, 144.0, 14.0, 15.0, 12.0, 1.0, 0.0, 0.0, 9.0, 24.0, 3.0, 3.0, 10.0, 2.0, 6.0, 81.0, 122.0, 2.0, 0.0, 0.0, 0.0, 0.0, 144.0, 144.0, 144.0, 50.0, 1.0, 4.0, 14.0, 17.0, 52.0, 9.0, 15.0, 49.0, 14.0, 81.0, 144.0, 40.0, 0.0, 0.0, 1.0, 6.0, 3.0, 15.0, 97.0, 55.0, 11.0, 16.0, 13.0, 0.0, 0.0, 0.0, 0.0, 3.0, 144.0, 100.0, 18.0, 0.0, 0.0, 0.0, 2.0, 98.0, 144.0, 12.0, 0.0, 0.0, 0.0, 11.0, 60.0, 50.0, 0.0, 0.0, 0.0, 0.0, 6.0, 9.0, 35.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 93.0, 24.0, 0.0, 0.0, 0.0, 0.0, 0.0, 24.0, 71.0, 36.0, 0.0, 0.0, 0.0, 0.0, 1.0, 6.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0]"
+        self.c = Compressor(seed)
 
     def keys(self, pattern="*"):
         raise NotImplementedError
@@ -136,18 +139,17 @@ class LevelDBStorage(BaseStorage):
         raise NotImplementedError
 
     def append_val(self, key, val):
-        hashkey = os.urandom(16).encode('hex') 
-        key = '%s %s' % (key,hashkey)
-        self.storage.put(key, json.dumps(val))
+        cval = self.c.compress(json.dumps(val))
+        with self.env.begin(write=True, db=self.storage) as txn:
+            txn.put(key, cval)
 
     def get_list(self, key):
         result = []
-        i = self.storage.raw_iterator()
-        i.seek(key)
-        while i.valid():
-            result.append(i.value())
-            i.next()
-        i.close()
+        with self.env.begin(db=self.storage) as txn:
+            cursor = txn.cursor()
+            if cursor.set_key(key):
+                for data in cursor.iternext_dup():
+                    result.append(self.c.decompress(data))
         return result
 
 class Compressor(object):

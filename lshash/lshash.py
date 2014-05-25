@@ -274,8 +274,20 @@ class LSHash(object):
         candidates = [(ix, d_func(query_point, self._as_np_array(ix)))
                       for ix in candidates]
         candidates.sort(key=lambda x: x[1])
-
+        
         return candidates[:num_results] if num_results else candidates
+        
+        '''
+        Lowe ration test
+        if len(candidates) > 1:
+            result = []
+            for a,b in self.pairwise(candidates):
+                if a[1] < 0.75 * b[1]:
+                    result.append(a)
+            return result[:num_results] if num_results else result
+        else:    
+            return candidates[:num_results] if num_results else candidates
+        '''
         
     def mutations(self, word, hamming_distance):
         result = set()
@@ -286,6 +298,11 @@ class LSHash(object):
                     mutation[index] = replacement
                 result.add("".join(mutation))
         return result
+        
+    def pairwise(self, iterable):
+        a, b = itertools.tee(iterable)
+        next(b, None)
+        return itertools.izip(a, b)
 
     ### distance functions
 
